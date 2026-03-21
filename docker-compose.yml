@@ -1,0 +1,27 @@
+# Bot only. WireGuard and firewall run on the host for full capability.
+# Option: run WG in a privileged container and mount /etc/wireguard.
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+      # If WG runs on host, mount the config so bot can read/write:
+      # - /etc/wireguard:/etc/wireguard
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - DATABASE_PATH=/data/bot.db
+    restart: unless-stopped
+
+  # Optional: run WireGuard in a sidecar (privileged, host network or extra caps)
+  # wireguard:
+  #   image: linuxserver/wireguard
+  #   cap_add:
+  #     - NET_ADMIN
+  #   sysctls:
+  #     - net.ipv4.conf.all.src_valid_mark=1
+  #   volumes:
+  #     - ./wireguard:/config
+  #   ports:
+  #     - "51820:51820/udp"
