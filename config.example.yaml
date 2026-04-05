@@ -2,24 +2,24 @@
 
 wireguard:
   interface: wg0
-  config_dir: /etc/wireguard
   config_path: /etc/wireguard/wg0.conf
-  # Общая подсеть — все видят друг друга
+  # Common subnet — all devices see each other
   common_subnet: "10.0.113.0/24"
-  # Подсети изолированы: 10.0.1.0/24, 10.0.2.0/24, ...
+  # Isolated subnets: 10.0.1.0/24, 10.0.2.0/24, ...
   isolated_subnet_prefix: "10.0"
   isolated_subnet_mask: 24
-  # Порт генерируется при первом запуске, можно задать вручную
-  port: null  # или например 51820
+  # Port is generated on first deploy; set manually if needed
+  port: null
 
 database:
   path: /data/bot.db
 
 bot:
   token: ""
-  admin_ids: []  # list of telegram user ids
+  admin_ids: []  # list of telegram user IDs
 
 server:
-  # Публичный ключ и endpoint заполняются при деплое
+  # Fill after running deploy.sh
   public_key: ""
-  endpoint: ""  # host or ip:port
+  endpoint: ""  # host or IP (and port if not using server.port)
+  port: null
