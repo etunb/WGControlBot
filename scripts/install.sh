@@ -6,7 +6,7 @@
 #
 # Optional environment variables:
 #   WIREGUARD_BOT_REPO - Git repository URL
-#   WIREGUARD_BOT_DIR  - Installation directory (default: /opt/wgcontrolbot)
+#   WIREGUARD_BOT_DIR  - Installation directory (default: /opt/wgcontrolbot, /home/wgcontrolbot with Snap Docker)
 #   WG_INTERFACE       - WireGuard interface name inside Docker (default: wg0)
 #   WG_MAIN_IFACE      - External network interface for Docker NAT (default: auto-detected)
 #   WG_PORT            - WireGuard UDP port (default: random 51820-51850)
@@ -16,6 +16,7 @@ set -e
 
 DEFAULT_REPO="https://github.com/etunb/WGControlBot.git"
 DEFAULT_DIR="/opt/wgcontrolbot"
+SNAP_DOCKER_DIR="/home/wgcontrolbot"
 
 ask() {
   prompt="$1"
@@ -73,6 +74,19 @@ detect_main_iface() {
   echo "eth0"
 }
 
+is_snap_docker() {
+  docker_path="$(command -v docker 2>/dev/null || true)"
+  [ "$docker_path" = "/snap/bin/docker" ] || echo "$docker_path" | grep -q '^/snap/'
+}
+
+default_project_dir() {
+  if is_snap_docker; then
+    echo "$SNAP_DOCKER_DIR"
+  else
+    echo "$DEFAULT_DIR"
+  fi
+}
+
 install_host_packages() {
   if ! command -v apt-get >/dev/null 2>&1; then
     echo "Automatic installation currently supports Debian/Ubuntu only."
@@ -98,12 +112,22 @@ install_host_packages() {
 prepare_project() {
   if [ -f "src/main.py" ] && [ -f "requirements.txt" ]; then
     PROJECT_DIR="$(pwd)"
+    if is_snap_docker && [ "${PROJECT_DIR#/opt/}" != "$PROJECT_DIR" ]; then
+      echo "Docker appears to be installed from Snap and cannot read project files under /opt."
+      echo "Re-run from a path under /home, for example:"
+      echo "  cd /root && WIREGUARD_BOT_DIR=$SNAP_DOCKER_DIR bash $PROJECT_DIR/scripts/install.sh"
+      exit 1
+    fi
     echo "Using current project directory: $PROJECT_DIR"
     return
   fi
 
   REPO="${WIREGUARD_BOT_REPO:-$DEFAULT_REPO}"
-  PROJECT_DIR="${WIREGUARD_BOT_DIR:-$(ask "Installation directory" "$DEFAULT_DIR")}"
+  DEFAULT_PROJECT_DIR="$(default_project_dir)"
+  if is_snap_docker && [ "$DEFAULT_PROJECT_DIR" = "$SNAP_DOCKER_DIR" ]; then
+    echo "Docker appears to be installed from Snap; using $SNAP_DOCKER_DIR because Snap Docker cannot read /opt reliably."
+  fi
+  PROJECT_DIR="${WIREGUARD_BOT_DIR:-$(ask "Installation directory" "$DEFAULT_PROJECT_DIR")}"
 
   mkdir -p "$(dirname "$PROJECT_DIR")"
   if [ -d "$PROJECT_DIR/.git" ]; then
