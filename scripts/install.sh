@@ -137,10 +137,9 @@ DATABASE_PATH=/data/bot.db
 EOF
 
   touch "$PROJECT_DIR/config.yaml"
-  COMPOSE_CMD="$(compose_cmd)"
-  (cd "$PROJECT_DIR" && $COMPOSE_CMD build bot)
-  (cd "$PROJECT_DIR" && $COMPOSE_CMD run --rm --no-deps --entrypoint sh bot -c \
-    'umask 077; mkdir -p /etc/wireguard; if [ ! -f /etc/wireguard/server_private.key ]; then wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key; elif [ ! -f /etc/wireguard/server_public.key ]; then wg pubkey < /etc/wireguard/server_private.key > /etc/wireguard/server_public.key; fi')
+  compose build bot
+  compose run --rm --no-deps --entrypoint sh bot -c \
+    'umask 077; mkdir -p /etc/wireguard; if [ ! -f /etc/wireguard/server_private.key ]; then wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key; elif [ ! -f /etc/wireguard/server_public.key ]; then wg pubkey < /etc/wireguard/server_private.key > /etc/wireguard/server_public.key; fi'
 
   SERVER_PRIVATE="$(cat "$WG_DIR/server_private.key")"
   SERVER_PUBLIC="$(cat "$WG_DIR/server_public.key")"
@@ -201,20 +200,29 @@ server:
 EOF
 }
 
-compose_cmd() {
+compose() {
   if docker compose version >/dev/null 2>&1; then
-    echo "docker compose"
+    docker compose -f "$PROJECT_DIR/docker-compose.yml" "$@"
   elif command -v docker-compose >/dev/null 2>&1; then
-    echo "docker-compose"
+    docker-compose -f "$PROJECT_DIR/docker-compose.yml" "$@"
   else
     echo "Docker Compose is not installed." >&2
     exit 1
   fi
 }
 
+compose_display_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    echo "docker compose -f $PROJECT_DIR/docker-compose.yml"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    echo "docker-compose -f $PROJECT_DIR/docker-compose.yml"
+  else
+    echo "docker compose -f $PROJECT_DIR/docker-compose.yml"
+  fi
+}
+
 start_bot() {
-  COMPOSE_CMD="$(compose_cmd)"
-  (cd "$PROJECT_DIR" && $COMPOSE_CMD up -d --build)
+  compose up -d --build
 }
 
 require_root
@@ -244,6 +252,6 @@ echo "Docker installation completed."
 echo "Project directory: $PROJECT_DIR"
 echo "WireGuard interface: $WG_IF"
 echo "WireGuard UDP port: $WG_PORT"
-echo "Status: cd $PROJECT_DIR && $(compose_cmd) ps"
-echo "Logs:   cd $PROJECT_DIR && $(compose_cmd) logs -f"
+echo "Status: $(compose_display_cmd) ps"
+echo "Logs:   $(compose_display_cmd) logs -f"
 echo "Open UDP port $WG_PORT on your firewall/router, then send /start to the bot in Telegram."
