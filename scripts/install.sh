@@ -10,6 +10,7 @@
 #   WG_INTERFACE       - WireGuard interface name inside Docker (default: wg0)
 #   WG_MAIN_IFACE      - External network interface for Docker NAT (default: auto-detected)
 #   WG_PORT            - WireGuard UDP port (default: random 51820-51850)
+#   WIREGUARD_BOT_REEXEC - Internal guard used when re-running from the updated clone
 
 set -e
 
@@ -113,6 +114,12 @@ prepare_project() {
     git clone "$REPO" "$PROJECT_DIR"
   fi
   cd "$PROJECT_DIR"
+
+  if [ -z "${WIREGUARD_BOT_REEXEC:-}" ] && [ -f "$PROJECT_DIR/scripts/install.sh" ]; then
+    echo "Restarting installer from $PROJECT_DIR/scripts/install.sh"
+    export WIREGUARD_BOT_REEXEC=1
+    exec bash "$PROJECT_DIR/scripts/install.sh"
+  fi
 }
 
 create_wireguard_config() {
