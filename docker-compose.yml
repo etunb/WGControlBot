@@ -4,11 +4,13 @@ services:
   bot:
     build: .
     env_file: .env
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
     volumes:
       - ./data:/data
       - ./config.yaml:/app/config.yaml:ro
-      # If WG runs on host, mount the config so bot can read/write:
-      # - /etc/wireguard:/etc/wireguard
+      - /etc/wireguard:/etc/wireguard
     environment:
       - CONFIG_PATH=/app/config.yaml
       - DATABASE_PATH=/data/bot.db

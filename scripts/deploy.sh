@@ -35,13 +35,16 @@ if [ ! -f "$CONFIG" ]; then
     echo "         Set WG_MAIN_IFACE if your interface is different."
   fi
 
+  chmod +x scripts/setup-wg-isolation.sh 2>/dev/null || true
+  PROJECT_DIR="$(pwd)"
+
   cat > "$CONFIG" << EOF
 [Interface]
 PrivateKey = $SERVER_PRIVATE
 ListenPort = $PORT
 Address = 10.0.113.1/24
-PostUp = iptables -A FORWARD -i $WG_INTERFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_INTERFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o $MAIN_IFACE -j MASQUERADE
+PostUp = WG_INTERFACE=$WG_INTERFACE $PROJECT_DIR/scripts/setup-wg-isolation.sh up; iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
+PostDown = WG_INTERFACE=$WG_INTERFACE $PROJECT_DIR/scripts/setup-wg-isolation.sh down; iptables -t nat -D POSTROUTING -o $MAIN_IFACE -j MASQUERADE
 EOF
   echo "Created $CONFIG with ListenPort=$PORT (external interface: $MAIN_IFACE)"
   echo "Server public key: $SERVER_PUBLIC"
@@ -53,7 +56,7 @@ fi
 # Apply isolation rules (optional)
 if [ -f "scripts/setup-wg-isolation.sh" ]; then
   chmod +x scripts/setup-wg-isolation.sh
-  WG_INTERFACE="$WG_INTERFACE" ./scripts/setup-wg-isolation.sh || true
+  WG_INTERFACE="$WG_INTERFACE" ./scripts/setup-wg-isolation.sh up || true
 fi
 
 # Bring up the interface (ignore if already up)

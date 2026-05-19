@@ -1,197 +1,197 @@
-#!/bin/sh
-# One-line install: sh -c "$(curl -fsSL https://YOUR_HOST/install.sh)"
-# Or: curl -fsSL https://YOUR_HOST/install.sh | sh
+#!/bin/bash
+# Interactive one-command installer for WGControlBot.
+#
+# Recommended:
+#   curl -fsSL https://raw.githubusercontent.com/etunb/WGControlBot/master/scripts/install.sh | sudo bash
 #
 # Optional environment variables:
 #   WIREGUARD_BOT_REPO - Git repository URL
-#   WIREGUARD_BOT_DIR  - Installation directory (default: /opt/wireguard-bot)
+#   WIREGUARD_BOT_DIR  - Installation directory (default: /opt/wgcontrolbot)
+#   WG_INTERFACE       - WireGuard interface name (default: wg0)
 #   WG_MAIN_IFACE      - External network interface for NAT (default: auto-detected)
+#   WG_PORT            - WireGuard UDP port (default: random 51820-51850)
 
 set -e
 
-# If we're in a project dir (has src/main.py), use it; else clone
-PROJECT_DIR="${WIREGUARD_BOT_DIR:-/opt/wireguard-bot}"
-if [ -f "src/main.py" ] && [ -f "requirements.txt" ]; then
-  PROJECT_DIR="$(pwd)"
-  echo "Using project directory: $PROJECT_DIR"
-else
-  REPO="${WIREGUARD_BOT_REPO:-}"
-  if [ -z "$REPO" ]; then
-    echo "WireGuard Telegram Bot — installation"
-    echo "Run from project directory, or set WIREGUARD_BOT_REPO to git URL."
-    printf "Git URL (e.g. https://github.com/user/wireguard-bot.git): "
-    read -r REPO
-    if [ -z "$REPO" ]; then
-      echo "No URL provided. Exiting."
-      echo "Usage: git clone <repo> $PROJECT_DIR && cd $PROJECT_DIR && sh scripts/install.sh"
-      exit 1
-    fi
+DEFAULT_REPO="https://github.com/etunb/WGControlBot.git"
+DEFAULT_DIR="/opt/wgcontrolbot"
+
+ask() {
+  prompt="$1"
+  default="$2"
+  if [ -r /dev/tty ]; then
+    input="/dev/tty"
+    output="/dev/tty"
+  else
+    input="/dev/stdin"
+    output="/dev/stderr"
   fi
-  if ! command -v git >/dev/null 2>&1; then
-    echo "Git is not installed. Please install git first."
+  if [ -n "$default" ]; then
+    printf "%s [%s]: " "$prompt" "$default" > "$output"
+  else
+    printf "%s: " "$prompt" > "$output"
+  fi
+  read -r value < "$input"
+  if [ -z "$value" ]; then
+    value="$default"
+  fi
+  printf "%s" "$value"
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Run this installer as root, for example:"
+    echo "  curl -fsSL https://raw.githubusercontent.com/etunb/WGControlBot/master/scripts/install.sh | sudo bash"
     exit 1
   fi
+}
+
+detect_main_iface() {
+  if [ -n "${WG_MAIN_IFACE:-}" ]; then
+    echo "$WG_MAIN_IFACE"
+    return
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    iface="$(ip route | awk '/default/ {print $5; exit}')"
+    if [ -n "$iface" ]; then
+      echo "$iface"
+      return
+    fi
+  fi
+  echo "eth0"
+}
+
+install_host_packages() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "Automatic package installation currently supports Debian/Ubuntu only."
+    echo "Install manually: git wireguard-tools iptables python3 python3-venv python3-pip"
+    exit 1
+  fi
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    git wireguard-tools iptables iproute2 python3 python3-venv python3-pip ca-certificates curl
+}
+
+prepare_project() {
+  if [ -f "src/main.py" ] && [ -f "requirements.txt" ]; then
+    PROJECT_DIR="$(pwd)"
+    echo "Using current project directory: $PROJECT_DIR"
+    return
+  fi
+
+  REPO="${WIREGUARD_BOT_REPO:-$DEFAULT_REPO}"
+  PROJECT_DIR="${WIREGUARD_BOT_DIR:-$(ask "Installation directory" "$DEFAULT_DIR")}"
+
   mkdir -p "$(dirname "$PROJECT_DIR")"
   if [ -d "$PROJECT_DIR/.git" ]; then
-    echo "Directory $PROJECT_DIR exists, updating..."
-    (cd "$PROJECT_DIR" && git pull || true)
+    echo "Updating $PROJECT_DIR"
+    git -C "$PROJECT_DIR" pull --ff-only || true
   else
+    echo "Cloning $REPO to $PROJECT_DIR"
     git clone "$REPO" "$PROJECT_DIR"
   fi
   cd "$PROJECT_DIR"
-fi
+}
 
-# Docker or native?
-echo ""
-echo "Select installation method:"
-echo "  1) Docker (recommended)"
-echo "  2) Native (systemd + WireGuard on host)"
-printf "Choice [1]: "
-read -r choice
-choice="${choice:-1}"
+create_wireguard_config() {
+  WG_IF="${WG_INTERFACE:-$(ask "WireGuard interface" "wg0")}"
+  WG_DIR="/etc/wireguard"
+  WG_CONFIG="$WG_DIR/${WG_IF}.conf"
+  WG_PORT="${WG_PORT:-$(ask "WireGuard UDP port" "$(shuf -i 51820-51850 -n 1 2>/dev/null || echo 51820)")}"
+  MAIN_IFACE="$(ask "External interface for NAT" "$(detect_main_iface)")"
 
-# Common prompts
-echo ""
-printf "Telegram bot token (from @BotFather): "
-read -r BOT_TOKEN
-printf "Telegram admin ID(s), comma-separated: "
-read -r ADMIN_IDS
-printf "Server endpoint (hostname or IP for client configs): "
-read -r ENDPOINT
+  mkdir -p "$WG_DIR"
+  chmod 700 "$WG_DIR"
 
-if [ -z "$BOT_TOKEN" ] || [ -z "$ADMIN_IDS" ]; then
-  echo "Error: Bot token and admin IDs are required."
-  exit 1
-fi
+  if [ ! -f "$WG_DIR/server_private.key" ]; then
+    umask 077
+    wg genkey | tee "$WG_DIR/server_private.key" | wg pubkey > "$WG_DIR/server_public.key"
+  elif [ ! -f "$WG_DIR/server_public.key" ]; then
+    wg pubkey < "$WG_DIR/server_private.key" > "$WG_DIR/server_public.key"
+  fi
 
-# Generate a random port for WireGuard within typical range
-WG_PORT="${WG_PORT:-$(shuf -i 51820-51850 -n 1 2>/dev/null || echo 51820)}"
-echo "Using WireGuard port: $WG_PORT"
+  SERVER_PRIVATE="$(cat "$WG_DIR/server_private.key")"
+  SERVER_PUBLIC="$(cat "$WG_DIR/server_public.key")"
 
-case "$choice" in
-  2)
-    # --- Native installation ---
-    if [ "$(id -u)" -ne 0 ]; then
-      echo "Native installation requires root privileges. Please run with sudo or as root."
-      exit 1
-    fi
+  chmod +x "$PROJECT_DIR/scripts/setup-wg-isolation.sh"
 
-    # Check for supported package manager (Debian/Ubuntu)
-    if ! command -v apt-get >/dev/null 2>&1; then
-      echo "This installer currently supports Debian/Ubuntu for automatic dependency installation."
-      echo "On other distributions, please install dependencies manually:"
-      echo "  wireguard-tools, python3, python3-venv, python3-pip, iptables"
-      exit 1
-    fi
-
-    # Install system dependencies
-    apt-get update
-    apt-get install -y --no-install-recommends wireguard-tools python3 python3-venv python3-pip iptables
-
-    # Determine the main external network interface for NAT (outgoing internet)
-    MAIN_IFACE="${WG_MAIN_IFACE:-}"
-    if [ -z "$MAIN_IFACE" ]; then
-      if command -v ip >/dev/null 2>&1; then
-        MAIN_IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
-      fi
-      if [ -z "$MAIN_IFACE" ]; then
-        # Try common interface names
-        for iface in eth0 ens3 enp0s3; do
-          if ip link show "$iface" >/dev/null 2>&1; then
-            MAIN_IFACE="$iface"
-            break
-          fi
-        done
-      fi
-      if [ -z "$MAIN_IFACE" ]; then
-        MAIN_IFACE="eth0"
-        echo "Warning: Could not auto-detect external interface. Defaulting to eth0."
-        echo "         If incorrect, set WG_MAIN_IFACE environment variable to the correct interface."
-      fi
-    fi
-    echo "External interface for NAT: $MAIN_IFACE"
-
-    # WireGuard configuration
-    WG_IF="${WG_INTERFACE:-wg0}"
-    WG_DIR="${WG_DIR:-/etc/wireguard}"
-    CONFIG="$WG_DIR/${WG_IF}.conf"
-
-    if [ ! -f "$CONFIG" ]; then
-      mkdir -p "$WG_DIR"
-      umask 077
-      wg genkey | tee "$WG_DIR/server_private.key" | wg pubkey > "$WG_DIR/server_public.key"
-      SERVER_PRIVATE="$(cat "$WG_DIR/server_private.key")"
-      cat > "$CONFIG" << EOF
+  if [ ! -f "$WG_CONFIG" ]; then
+    cat > "$WG_CONFIG" << EOF
 [Interface]
 PrivateKey = $SERVER_PRIVATE
 ListenPort = $WG_PORT
 Address = 10.0.113.1/24
-PostUp = iptables -A FORWARD -i $WG_IF -j ACCEPT; iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_IF -j ACCEPT; iptables -t nat -D POSTROUTING -o $MAIN_IFACE -j MASQUERADE
+PostUp = WG_INTERFACE=$WG_IF $PROJECT_DIR/scripts/setup-wg-isolation.sh up; iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
+PostDown = WG_INTERFACE=$WG_IF $PROJECT_DIR/scripts/setup-wg-isolation.sh down; iptables -t nat -D POSTROUTING -o $MAIN_IFACE -j MASQUERADE
 EOF
-      echo "Created WireGuard config: $CONFIG"
-    else
-      SERVER_PRIVATE=""
-      echo "WireGuard config already exists: $CONFIG"
+    echo "Created WireGuard config: $WG_CONFIG"
+  else
+    echo "WireGuard config already exists: $WG_CONFIG"
+    if grep -q "^ListenPort" "$WG_CONFIG"; then
+      WG_PORT="$(awk -F= '/^ListenPort/ {gsub(/[ \t]/, "", $2); print $2; exit}' "$WG_CONFIG")"
     fi
+  fi
 
-    SERVER_PUBLIC="$(cat "$WG_DIR/server_public.key" 2>/dev/null || echo '')"
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  if [ -d /etc/sysctl.d ]; then
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wgcontrolbot.conf
+  fi
 
-    # Apply isolation rules
-    if [ -f "$PROJECT_DIR/scripts/setup-wg-isolation.sh" ]; then
-      chmod +x "$PROJECT_DIR/scripts/setup-wg-isolation.sh"
-      WG_INTERFACE="$WG_IF" "$PROJECT_DIR/scripts/setup-wg-isolation.sh" || true
-    fi
+  WG_INTERFACE="$WG_IF" "$PROJECT_DIR/scripts/setup-wg-isolation.sh" up || true
+  wg-quick down "$WG_IF" 2>/dev/null || true
+  wg-quick up "$WG_IF"
+}
 
-    # Bring up the WireGuard interface
-    wg-quick up "$WG_IF" 2>/dev/null || true
+write_app_config() {
+  mkdir -p "$PROJECT_DIR/data"
+  ADMIN_IDS_YAML="[$(echo "$ADMIN_IDS" | sed 's/,/, /g')]"
 
-    # Create project data directory
-    mkdir -p "$PROJECT_DIR/data"
+  if [ "$INSTALL_MODE" = "docker" ]; then
+    DB_PATH="/data/bot.db"
+    CONFIG_PATH="/app/config.yaml"
+  else
+    DB_PATH="$PROJECT_DIR/data/bot.db"
+    CONFIG_PATH="$PROJECT_DIR/config.yaml"
+  fi
 
-    # Prepare admin IDs as a YAML list
-    ADMIN_IDS_YAML="[$(echo "$ADMIN_IDS" | sed 's/,/, /g')]"
-
-    # Create .env file
-    cat > "$PROJECT_DIR/.env" << EOF
+  cat > "$PROJECT_DIR/.env" << EOF
 TELEGRAM_BOT_TOKEN=$BOT_TOKEN
 TELEGRAM_ADMIN_IDS=$ADMIN_IDS
-DATABASE_PATH=$PROJECT_DIR/data/bot.db
+WG_SERVER_ENDPOINT=$ENDPOINT
+CONFIG_PATH=$CONFIG_PATH
+DATABASE_PATH=$DB_PATH
 EOF
 
-    # Create config.yaml
-    cat > "$PROJECT_DIR/config.yaml" << EOF
+  cat > "$PROJECT_DIR/config.yaml" << EOF
 bot:
   token: "$BOT_TOKEN"
   admin_ids: $ADMIN_IDS_YAML
 wireguard:
   interface: $WG_IF
-  config_path: $CONFIG
+  config_path: $WG_CONFIG
   port: $WG_PORT
   common_subnet: "10.0.113.0/24"
+  isolated_subnet_prefix: "10.0"
+  isolated_subnet_mask: 24
 database:
-  path: $PROJECT_DIR/data/bot.db
+  path: $DB_PATH
 server:
   public_key: "$SERVER_PUBLIC"
   endpoint: "$ENDPOINT"
   port: $WG_PORT
 EOF
+}
 
-    # Python virtual environment and dependencies
-    python3 -m venv "$PROJECT_DIR/.venv"
-    "$PROJECT_DIR/.venv/bin/pip" install -q -r "$PROJECT_DIR/requirements.txt"
+install_native_service() {
+  python3 -m venv "$PROJECT_DIR/.venv"
+  "$PROJECT_DIR/.venv/bin/pip" install --upgrade pip
+  "$PROJECT_DIR/.venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
 
-    # Enable and start WireGuard via systemd (if available)
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl enable wg-quick@${WG_IF} 2>/dev/null || true
-      systemctl start wg-quick@${WG_IF} 2>/dev/null || true
-    fi
-
-    # Create systemd service for the bot
-    cat > /etc/systemd/system/wireguard-bot.service << EOF
+  cat > /etc/systemd/system/wgcontrolbot.service << EOF
 [Unit]
-Description=WireGuard Telegram Bot
-After=network.target
+Description=WGControlBot Telegram Bot
+After=network-online.target wg-quick@${WG_IF}.service
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -205,78 +205,75 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable wireguard-bot
-    systemctl start wireguard-bot
+  systemctl daemon-reload
+  systemctl enable "wg-quick@${WG_IF}"
+  systemctl restart "wg-quick@${WG_IF}"
+  systemctl enable wgcontrolbot
+  systemctl restart wgcontrolbot
+}
 
-    echo "Native installation completed."
-    echo "Check bot status: systemctl status wireguard-bot"
-    echo "View logs: journalctl -u wireguard-bot -f"
-    ;;
-  *)
-    # --- Docker installation ---
-    if ! command -v docker >/dev/null 2>&1; then
-      echo "Docker is not installed. Please install Docker first: https://docs.docker.com/engine/install/"
-      exit 1
-    fi
+install_docker_service() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is not installed. Install Docker first or choose native installation."
+    exit 1
+  fi
 
-    # Detect docker compose command (v2 or v1)
-    if docker compose version >/dev/null 2>&1; then
-      COMPOSE_CMD="docker compose"
-    elif command -v docker-compose >/dev/null 2>&1; then
-      COMPOSE_CMD="docker-compose"
-    else
-      echo "Docker Compose not found. Please install Docker Compose."
-      exit 1
-    fi
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="docker-compose"
+  else
+    echo "Docker Compose is not installed."
+    exit 1
+  fi
 
-    mkdir -p "$PROJECT_DIR/data"
+  systemctl enable "wg-quick@${WG_IF}" 2>/dev/null || true
+  systemctl restart "wg-quick@${WG_IF}" 2>/dev/null || true
+  (cd "$PROJECT_DIR" && $COMPOSE_CMD up -d --build)
+}
 
-    # Create .env file
-    cat > "$PROJECT_DIR/.env" << EOF
-TELEGRAM_BOT_TOKEN=$BOT_TOKEN
-TELEGRAM_ADMIN_IDS=$ADMIN_IDS
-WG_SERVER_ENDPOINT=$ENDPOINT
-CONFIG_PATH=/app/config.yaml
-DATABASE_PATH=/data/bot.db
-EOF
+require_root
 
-    # Prepare admin IDs as YAML list
-    ADMIN_IDS_YAML="[$(echo "$ADMIN_IDS" | sed 's/,/, /g')]"
-
-    # Try to get server public key if host WG config exists (optional)
-    SERVER_PUBLIC=""
-    if [ -f "/etc/wireguard/wg0.conf" ]; then
-      SERVER_PUBLIC="$(wg show wg0 public-key 2>/dev/null 2>&1 || true)"
-    fi
-
-    # Create config.yaml
-    cat > "$PROJECT_DIR/config.yaml" << EOF
-bot:
-  token: "$BOT_TOKEN"
-  admin_ids: $ADMIN_IDS_YAML
-wireguard:
-  interface: wg0
-  config_path: /etc/wireguard/wg0.conf
-  port: $WG_PORT
-  common_subnet: "10.0.113.0/24"
-database:
-  path: /data/bot.db
-server:
-  public_key: "$SERVER_PUBLIC"
-  endpoint: "$ENDPOINT"
-  port: $WG_PORT
-EOF
-
-    # Build and start containers
-    (cd "$PROJECT_DIR" && $COMPOSE_CMD up -d --build)
-
-    echo "Docker installation completed."
-    echo "Check bot status: $COMPOSE_CMD -f $PROJECT_DIR/docker-compose.yml ps"
-    echo "Note: If WireGuard runs on the host, mount /etc/wireguard into the container (docker-compose.yml)."
-    ;;
-esac
+echo "WGControlBot installer"
+echo ""
+install_host_packages
+prepare_project
 
 echo ""
-echo "Installation finished. Start the bot in Telegram, generate a referral link to add users."
-echo "Don't forget to open UDP port $WG_PORT on your firewall and router."
+echo "Answer the setup questions."
+BOT_TOKEN="$(ask "Telegram bot token from @BotFather" "")"
+ADMIN_IDS="$(ask "Telegram admin ID(s), comma-separated" "")"
+ENDPOINT="$(ask "Server public IP or domain for client configs" "")"
+MODE_CHOICE="$(ask "Install mode: native or docker" "native")"
+
+if [ -z "$BOT_TOKEN" ] || [ -z "$ADMIN_IDS" ] || [ -z "$ENDPOINT" ]; then
+  echo "Bot token, admin IDs, and endpoint are required."
+  exit 1
+fi
+
+case "$MODE_CHOICE" in
+  docker|Docker|2) INSTALL_MODE="docker" ;;
+  *) INSTALL_MODE="native" ;;
+esac
+
+create_wireguard_config
+write_app_config
+
+if [ "$INSTALL_MODE" = "docker" ]; then
+  install_docker_service
+  echo ""
+  echo "Docker installation completed."
+  echo "Status: cd $PROJECT_DIR && docker compose ps"
+  echo "Logs:   cd $PROJECT_DIR && docker compose logs -f"
+else
+  install_native_service
+  echo ""
+  echo "Native installation completed."
+  echo "Status: systemctl status wgcontrolbot"
+  echo "Logs:   journalctl -u wgcontrolbot -f"
+fi
+
+echo ""
+echo "WireGuard interface: $WG_IF"
+echo "WireGuard UDP port: $WG_PORT"
+echo "Open UDP port $WG_PORT on your firewall/router, then send /start to the bot in Telegram."

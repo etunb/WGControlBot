@@ -1,190 +1,186 @@
-# WireGuard Control Bot
+# WGControlBot
 
-Telegram bot for managing WireGuard VPN users and configurations with network isolation and daily statistics.
+Telegram bot for managing WireGuard VPN users and client configs.
+
+The bot can create client configs in a common VPN subnet or in isolated per-user subnets, manage users through Telegram, generate one-time invite links, and collect daily peer statistics.
 
 ## Features
 
-### For Users
-- Create WireGuard configs in the **common network** (all devices see each other) or a **personal isolated network**
-- Enable, disable, or delete their own configs
-- Simple inline menu interface
-
-### For Admins
-- All user features, plus:
-- Create configs in **any isolated subnet** (specify subnet number)
-- User management: add, disable, delete users
-- **One-time referral links** - share a link, first user who opens it becomes registered
-- View daily statistics (peers, traffic by subnet)
-
-## Architecture
-
-- **WireGuard VPN** runs on the server (random port by default)
-- **Telegram bot** (Python, aiogram) manages users and generates configs
-- **SQLite** stores user data and daily statistics
-- **Network isolation** via iptables rules:
-  - `10.0.113.0/24` — common subnet (all devices can communicate)
-  - `10.0.i.0/24` (i ≠ 113) — isolated subnets (devices only see others in same subnet)
+- Interactive Telegram menu for users and admins
+- WireGuard client config generation
+- Common subnet: `10.0.113.0/24`
+- Isolated subnets: `10.0.i.0/24`, excluding `10.0.113.0/24`
+- User enable/disable/delete actions
+- Config enable/disable/delete actions
+- One-time referral links for registration
+- SQLite storage
+- Daily stats collection
 
 ## Requirements
 
-- Linux server (Debian/Ubuntu recommended)
-- Python 3.10+ (for native install) or Docker + Docker Compose
+- Debian/Ubuntu server with root access
+- Public IP address or domain name
 - Telegram bot token from [@BotFather](https://t.me/botfather)
-- Server with a public IP address or domain
-- UDP port open on firewall (random between 51820-51850 by default)
+- Your Telegram numeric user ID for admin access
+- Open UDP port for WireGuard, random `51820-51850` by default
 
-## Quick Install
+The installer sets up WireGuard, iptables rules, Python dependencies, configs, and autostart.
 
-### Option 1: One-Command Installer (Recommended)
+## One-Command Install
 
-From your terminal:
+Run this on the server:
 
 ```bash
-# Clone the repository
+curl -fsSL https://raw.githubusercontent.com/etunb/WGControlBot/master/scripts/install.sh | sudo bash
+```
+
+The installer asks all required questions in the terminal:
+
+- Telegram bot token
+- Telegram admin ID(s), comma-separated
+- Public server IP/domain for client configs
+- Install mode: `native` or `docker`
+- WireGuard interface, default `wg0`
+- WireGuard UDP port, default random `51820-51850`
+- External network interface for NAT, auto-detected by default
+
+When run through the one-command installer, it also asks for the installation directory, default `/opt/wgcontrolbot`.
+
+Recommended install mode is `native`. Docker mode runs the bot in Docker, but WireGuard still runs on the host because the bot manages the host WireGuard interface.
+
+After installation:
+
+```bash
+systemctl status wgcontrolbot
+journalctl -u wgcontrolbot -f
+```
+
+For Docker mode:
+
+```bash
+cd /opt/wgcontrolbot
+docker compose ps
+docker compose logs -f
+```
+
+## Non-Interactive Defaults
+
+You can predefine installation paths and WireGuard settings:
+
+```bash
+export WIREGUARD_BOT_DIR=/opt/wgcontrolbot
+export WIREGUARD_BOT_REPO=https://github.com/etunb/WGControlBot.git
+export WG_INTERFACE=wg0
+export WG_PORT=51820
+export WG_MAIN_IFACE=eth0
+curl -fsSL https://raw.githubusercontent.com/etunb/WGControlBot/master/scripts/install.sh | sudo -E bash
+```
+
+The bot token, admin IDs, endpoint, and install mode are still asked interactively.
+
+## Manual Install From Clone
+
+```bash
 git clone https://github.com/etunb/WGControlBot.git
 cd WGControlBot
-
-# Run the interactive installer
-sudo sh scripts/install.sh
+sudo bash scripts/install.sh
 ```
 
-The installer will:
-1. Ask whether to use Docker or native/systemd
-2. Prompt for Telegram bot token, admin IDs, and server endpoint
-3. Set up WireGuard (generate keys, random port)
-4. Configure and start the bot with autostart
+If the installer is run from a cloned project directory, it uses the current directory instead of cloning into `/opt/wgcontrolbot`.
 
-For remote download (without cloning):
-```bash
-export WIREGUARD_BOT_REPO=https://github.com/youruser/wireguard-bot.git
-sh -c "$(curl -fsSL https://YOUR_HOST/scripts/install.sh)"
-```
+## Configuration Files
 
-### Option 2: Manual Docker Setup
+The installer creates:
 
-```bash
-git clone https://github.com/etunb/WGControlBot.git
-cd WGControlBot
+- `.env`
+- `config.yaml`
+- `/etc/wireguard/wg0.conf`, or another interface if selected
+- `data/bot.db`
+- `/etc/systemd/system/wgcontrolbot.service` for native mode
 
-# Copy and edit configuration files
-cp config.example.yaml config.yaml
-cp .env.example .env
-# Edit config.yaml and .env with your values (see Configuration section)
-
-# Start services
-docker compose up -d
-```
-
-### Option 3: Manual Native Setup
-
-```bash
-git clone https://github.com/etunb/WGControlBot.git
-cd WGControlBot
-
-# 1. Deploy WireGuard on the server (run once)
-sudo sh scripts/deploy.sh
-# Copy the output (public_key, port) to config.yaml
-
-# 2. Create configuration files
-cp config.example.yaml config.yaml
-cp .env.example .env
-# Fill in config.yaml and .env
-
-# 3. Set up Python environment
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# 4. Run the bot (for testing)
-python -m src.main
-
-# 5. Set up systemd service (autostart)
-sudo cp scripts/wireguard-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable wireguard-bot
-sudo systemctl start wireguard-bot
-```
-
-## Configuration
-
-### `config.yaml`
+Example `config.yaml`:
 
 ```yaml
 bot:
   token: "YOUR_BOT_TOKEN"
-  admin_ids: [123456789, 987654321]  # Telegram user IDs
-
+  admin_ids: [123456789]
 wireguard:
   interface: wg0
-  config_path: /etc/wireguard/wg0.conf  # Path to WG server config
-  port: 51820  # Optional: omit to use random port from deploy
+  config_path: /etc/wireguard/wg0.conf
+  port: 51820
   common_subnet: "10.0.113.0/24"
-
+  isolated_subnet_prefix: "10.0"
+  isolated_subnet_mask: 24
 database:
-  path: /data/bot.db  # Or ./data/bot.db for native
-
+  path: /opt/wgcontrolbot/data/bot.db
 server:
-  public_key: "SERVER_PUBLIC_KEY"  # From deploy.sh output
-  endpoint: "your-server.com"      # Public IP or domain
-  port: 51820                      # Same as wireguard.port
+  public_key: "SERVER_PUBLIC_KEY"
+  endpoint: "vpn.example.com"
+  port: 51820
 ```
 
-### `.env`
+Keep `.env` and `config.yaml` private. They are ignored by git.
 
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_ADMIN_IDS=123456789,987654321
-DATABASE_PATH=/data/bot.db
-# Optional: WG_SERVER_ENDPOINT overrides server.endpoint
+## Telegram Usage
+
+1. Send `/start` to the bot.
+2. The admin IDs entered during install get admin access.
+3. Use "Пригласительная ссылка" to create a one-time invite link.
+4. Users open the invite link and then manage their VPN configs from the menu.
+
+Admins can also run:
+
+```text
+/add_user <telegram_id> [admin: 0|1]
 ```
-
-## Setup After Installation
-
-1. **Start the bot** in Telegram by sending `/start` to it.
-2. **Add initial admins**: The IDs in `config.yaml` are automatically added as admins on first `/start`. You can also use `/add_user <telegram_id> 1` in the bot.
-3. **Generate a referral link**: As admin, tap "🔗 Пригласительная ссылка" and share it with new users. The first user to click becomes registered.
-4. **Open firewall port**: Allow UDP on the WireGuard port (`$WG_PORT`) and set up port forwarding on your router if needed.
 
 ## Network Isolation
 
-The bot supports:
-- **Common network** (`10.0.113.0/24`): all devices can communicate with each other and with isolated networks.
-- **Isolated networks** (`10.0.1.0/24`, `10.0.2.0/24`, ...): devices only see others in the same isolated subnet. They can still access the common network.
+The installer enables IP forwarding and applies iptables rules through:
 
-Isolation is enforced by `scripts/setup-wg-isolation.sh`, which applies iptables FORWARD rules. Run it manually or include it in WireGuard's PostUp if desired.
+```bash
+scripts/setup-wg-isolation.sh
+```
 
-## Statistics
+Rules allow:
 
-Daily statistics are collected automatically at 00:05. Data includes:
-- Total peers and active peers
-- Traffic (rx/tx)
-- Distribution by subnet
+- Common subnet to reach all VPN subnets
+- Isolated subnet peers to reach peers in the same isolated subnet
+- Other WireGuard-to-WireGuard traffic to be dropped
 
-View statistics via the bot's admin interface.
+The WireGuard config calls the script from `PostUp` and `PostDown`, so rules are restored when the interface restarts.
 
 ## Troubleshooting
 
-**Bot doesn't start:**
-- Check logs: `docker compose logs -f` or `journalctl -u wireguard-bot -f`
-- Ensure config.yaml and .env exist and are correct
-- Verify database path is writable
+Bot logs:
 
-**WireGuard config not generating:**
-- Run `sudo sh scripts/deploy.sh` manually
-- Ensure ports are open: `sudo ufw allow 51820/udp`
+```bash
+journalctl -u wgcontrolbot -f
+```
 
-**Clients can't connect:**
-- Verify server endpoint is reachable from internet
-- Check firewall allows UDP on the WireGuard port
-- Confirm NAT rules exist: `sudo iptables -L FORWARD -v`
+WireGuard status:
 
-**Docker can't manage WireGuard:**
-- The bot reads `/etc/wireguard/wg0.conf`. Mount it: in `docker-compose.yml` uncomment the volume.
-- For full WG management, run the bot in privileged mode or on the host network (not recommended).
+```bash
+wg show
+systemctl status wg-quick@wg0
+```
+
+Firewall checks:
+
+```bash
+iptables -L FORWARD -v -n
+iptables -t nat -L POSTROUTING -v -n
+```
+
+Common issues:
+
+- Open the selected UDP port on the server firewall and router/cloud security group.
+- Make sure the endpoint entered during install is reachable from client devices.
+- In Docker mode, the container needs host networking, `NET_ADMIN`, and `/etc/wireguard` mounted. These are already set in `docker-compose.yml`.
 
 ## Project Structure
 
-```
+```text
 WGControlBot/
 ├── config.example.yaml
 ├── .env.example
@@ -192,40 +188,15 @@ WGControlBot/
 ├── Dockerfile
 ├── requirements.txt
 ├── scripts/
-│   ├── install.sh          # Interactive installer
-│   ├── deploy.sh           # Deploy WireGuard once
-│   └── setup-wg-isolation.sh  # iptables rules
-│   # systemd unit file is created by install.sh, not in repo
+│   ├── install.sh
+│   ├── deploy.sh
+│   └── setup-wg-isolation.sh
 ├── src/
-│   ├── main.py             # Entry point, scheduler
-│   ├── config.py
+│   ├── main.py
 │   ├── bot/
-│   │   ├── handlers.py     # Telegram command handlers
-│   │   ├── filters.py
-│   │   └── keyboards.py
 │   ├── db/
-│   │   ├── database.py
-│   │   ├── models.py
-│   │   └── repository.py
 │   ├── wireguard/
-│   │   └── manager.py      # WG config generation
 │   └── stats/
-│       └── collector.py    # Daily stats collection
-└── data/                   # Created at runtime (not in repo)
+└── data/
     └── bot.db
 ```
-
-## Security Notes
-
-- Keep `config.yaml` and `.env` out of version control (they're in `.gitignore`).
-- The bot requires root privileges only if managing WireGuard directly on the host (native install). In Docker, it needs access to `/etc/wireguard`.
-- WireGuard private keys are stored in `/etc/wireguard/` with restrictive permissions (umask 077).
-- Use HTTPS/Tor for additional privacy when distributing client configs (the endpoint is stored in plain text).
-
-## License
-
-MIT
-
-## Support
-
-Report issues: https://github.com/etunb/WGControlBot/issues

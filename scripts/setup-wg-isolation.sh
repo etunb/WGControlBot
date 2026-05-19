@@ -1,33 +1,49 @@
 #!/bin/bash
 # Firewall rules for WireGuard subnet isolation.
-# - 10.0.113.0/24: common subnet, can communicate with all VPN subnets.
-# - 10.0.i.0/24: isolated, only within same 10.0.i.0/24.
-# Run as root, e.g. from WireGuard PostUp.
+# Usage:
+#   WG_INTERFACE=wg0 scripts/setup-wg-isolation.sh up
+#   WG_INTERFACE=wg0 scripts/setup-wg-isolation.sh down
 
+set -e
+
+ACTION="${1:-up}"
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
 COMMON_SUBNET="10.0.113.0/24"
 VPN_SUPERNET="10.0.0.0/16"
 
-# Use iptables if nft not desired
-iptables -C FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$COMMON_SUBNET" -d "$VPN_SUPERNET" -j ACCEPT 2>/dev/null || \
-  iptables -A FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$COMMON_SUBNET" -d "$VPN_SUPERNET" -j ACCEPT
+rule() {
+  action="$1"
+  shift
+  if [ "$action" = "up" ]; then
+    iptables -C "$@" 2>/dev/null || iptables -A "$@"
+  else
+    while iptables -C "$@" 2>/dev/null; do
+      iptables -D "$@" || true
+    done
+  fi
+}
 
-iptables -C FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -d "$COMMON_SUBNET" -s "$VPN_SUPERNET" -j ACCEPT 2>/dev/null || \
-  iptables -A FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -d "$COMMON_SUBNET" -s "$VPN_SUPERNET" -j ACCEPT
+case "$ACTION" in
+  up|down) ;;
+  *)
+    echo "Usage: $0 [up|down]"
+    exit 1
+    ;;
+esac
 
-# Isolated subnets: allow only same subnet (10.0.1, 10.0.2, ... 10.0.112, 10.0.114, ...)
+rule "$ACTION" FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$COMMON_SUBNET" -d "$VPN_SUPERNET" -j ACCEPT
+rule "$ACTION" FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -d "$COMMON_SUBNET" -s "$VPN_SUPERNET" -j ACCEPT
+
 for i in $(seq 1 112); do
   sub="10.0.$i.0/24"
-  iptables -C FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$sub" -d "$sub" -j ACCEPT 2>/dev/null || \
-    iptables -A FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$sub" -d "$sub" -j ACCEPT
+  rule "$ACTION" FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$sub" -d "$sub" -j ACCEPT
 done
+
 for i in $(seq 114 255); do
   sub="10.0.$i.0/24"
-  iptables -C FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$sub" -d "$sub" -j ACCEPT 2>/dev/null || \
-    iptables -A FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$sub" -d "$sub" -j ACCEPT
+  rule "$ACTION" FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$sub" -d "$sub" -j ACCEPT
 done
 
-# Drop other forward between wg peers (optional, if default policy is ACCEPT)
-# iptables -A FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -j DROP
+rule "$ACTION" FORWARD -i "$WG_INTERFACE" -o "$WG_INTERFACE" -s "$VPN_SUPERNET" -d "$VPN_SUPERNET" -j DROP
 
-echo "WireGuard isolation rules applied for $WG_INTERFACE"
+echo "WireGuard isolation rules $ACTION for $WG_INTERFACE"

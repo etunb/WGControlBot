@@ -1,14 +1,11 @@
 """Telegram bot handlers: configs and admin."""
 from pathlib import Path
-from typing import Any
-
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from src.db import get_db_path
 from src.db.models import SUBNET_COMMON, SUBNET_ISOLATED
 from src.db.repository import (
     add_peer,
@@ -76,8 +73,8 @@ def create_router(
     db_path: Path | None,
 ) -> Router:
     router = Router()
-    has_access = HasAccessFilter(admin_ids)
-    is_admin = IsAdminFilter(admin_ids)
+    has_access = HasAccessFilter(admin_ids, db_path)
+    is_admin = IsAdminFilter(admin_ids, db_path)
 
     @router.message(Command("start"), F.text.regexp(r"^/start\s+ref_"))
     async def cmd_start_with_payload(message: Message):
@@ -102,7 +99,7 @@ def create_router(
     @router.message(Command("start"), has_access)
     async def cmd_start(message: Message):
         uid = message.from_user.id  # type: ignore
-        user = await get_user_by_telegram_id(uid)
+        user = await get_user_by_telegram_id(uid, db_path)
         if not user and uid in (admin_ids or []):
             user = await add_user(uid, message.from_user.username, True, db_path)
         is_ad = user.is_admin if user else (uid in (admin_ids or []))
@@ -120,7 +117,7 @@ def create_router(
     @router.callback_query(F.data == "back_to_menu", has_access)
     async def back_to_menu(cb: CallbackQuery):
         await cb.answer()
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         is_ad = (user and user.is_admin) or (cb.from_user.id in (admin_ids or []))
         await cb.message.edit_text(
             "WireGuard VPN. Управление конфигами — через меню ниже.",
@@ -131,7 +128,7 @@ def create_router(
     @router.callback_query(F.data == "list_configs", has_access)
     async def list_configs(cb: CallbackQuery):
         await cb.answer()
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user:
             await cb.message.edit_text("Пользователь не найден.")
             return
@@ -154,7 +151,7 @@ def create_router(
         if not peer:
             await cb.message.edit_text("Конфиг не найден.")
             return
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user or (user.id != peer.user_id and not user.is_admin):
             await cb.message.answer("Нет доступа к этому конфигу.")
             return
@@ -165,7 +162,7 @@ def create_router(
     @router.callback_query(F.data == "create_config", has_access)
     async def create_config_start(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user:
             await cb.message.edit_text("Пользователь не найден.")
             return
@@ -269,7 +266,7 @@ def create_router(
         if not peer:
             await cb.message.edit_text("Конфиг не найден.")
             return
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user or (user.id != peer.user_id and not user.is_admin):
             await cb.answer("Нет доступа.", show_alert=True)
             return
@@ -286,7 +283,7 @@ def create_router(
         if not peer:
             await cb.message.edit_text("Конфиг не найден.")
             return
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user or (user.id != peer.user_id and not user.is_admin):
             await cb.answer("Нет доступа.", show_alert=True)
             return
@@ -294,7 +291,9 @@ def create_router(
         all_peers = await list_all_peers(db_path)
         used = {p.address for p in all_peers if p.is_enabled and p.id != peer_id}
         try:
-            wg_manager.add_peer(peer.public_key, peer.subnet_type, peer.subnet_index, list(used))
+            if peer.address in used:
+                raise RuntimeError(f"Address {peer.address} is already used")
+            wg_manager.add_peer_with_address(peer.public_key, peer.address)
             wg_manager.reload_wg()
         except Exception as e:
             await cb.message.edit_text(f"Ошибка: {e}")
@@ -310,7 +309,7 @@ def create_router(
         if not peer:
             await cb.message.edit_text("Конфиг не найден.")
             return
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user or (user.id != peer.user_id and not user.is_admin):
             await cb.answer("Нет доступа.", show_alert=True)
             return
@@ -406,7 +405,7 @@ def create_router(
     @router.callback_query(F.data == "admin_referral", is_admin)
     async def admin_referral(cb: CallbackQuery):
         await cb.answer()
-        user = await get_user_by_telegram_id(cb.from_user.id)  # type: ignore
+        user = await get_user_by_telegram_id(cb.from_user.id, db_path)  # type: ignore
         if not user:
             await cb.message.edit_text("Ошибка: пользователь не найден.")
             return

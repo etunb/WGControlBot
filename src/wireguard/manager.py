@@ -3,10 +3,7 @@ WireGuard config management.
 - Common subnet: 10.0.113.0/24 (all peers can reach each other).
 - Isolated subnets: 10.0.1.0/24, 10.0.2.0/24, ... (only same subnet).
 """
-import asyncio
-import os
 import random
-import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -36,7 +33,6 @@ def _run(*args: str, capture: bool = True) -> str:
 def generate_keypair() -> tuple[str, str]:
     """Generate WireGuard private and public key."""
     priv = _run("wg", "genkey")
-    pub = _run("wg", "pubkey", capture=True)
     # wg pubkey reads from stdin
     proc = subprocess.run(
         ["wg", "pubkey"],
@@ -178,6 +174,16 @@ class WireGuardManager:
         peers.append(peer_block)
         self._write_config(server, peers)
         return address
+
+    def add_peer_with_address(self, public_key: str, address: str) -> None:
+        """Add a peer with an address already stored in the database."""
+        server, peers = self._parse_config()
+        peers = [p for p in peers if p.get("PublicKey") != public_key]
+        used = self._collect_used_addresses(peers)
+        if address in used:
+            raise RuntimeError(f"Address already in WireGuard config: {address}")
+        peers.append({"PublicKey": public_key, "AllowedIPs": address})
+        self._write_config(server, peers)
 
     def remove_peer(self, public_key: str) -> bool:
         server, peers = self._parse_config()

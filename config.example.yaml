@@ -12,7 +12,9 @@ wireguard:
   port: null
 
 database:
-  path: /data/bot.db
+  # Native install usually uses /opt/wgcontrolbot/data/bot.db.
+  # Docker install uses /data/bot.db inside the container.
+  path: /opt/wgcontrolbot/data/bot.db
 
 bot:
   token: ""
