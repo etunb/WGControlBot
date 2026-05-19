@@ -5,6 +5,7 @@ WireGuard config management.
 """
 import random
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -203,7 +204,11 @@ class WireGuardManager:
 
     def reload_wg(self) -> None:
         """Reload WireGuard (wg syncconf or restart interface)."""
-        _run(WG_BIN, "syncconf", self.interface, str(self.config_path))
+        stripped = _run(WG_QUICK_BIN, "strip", str(self.config_path))
+        with tempfile.NamedTemporaryFile("w", delete=True) as f:
+            f.write(stripped)
+            f.flush()
+            _run(WG_BIN, "syncconf", self.interface, f.name)
 
     def ensure_server_config(
         self,

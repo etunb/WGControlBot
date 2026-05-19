@@ -30,5 +30,5 @@ config.yaml
 
 # Local data
 data/
+wireguard/
 *.db
-

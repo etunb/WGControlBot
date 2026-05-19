@@ -24,7 +24,7 @@ The bot can create client configs in a common VPN subnet or in isolated per-user
 - Your Telegram numeric user ID for admin access
 - Open UDP port for WireGuard, random `51820-51850` by default
 
-The installer sets up WireGuard, iptables rules, Python dependencies, configs, and autostart.
+The installer sets up Docker, WireGuard inside the Docker container, iptables rules, configs, and starts everything with Docker Compose.
 
 ## One-Command Install
 
@@ -39,28 +39,27 @@ The installer asks all required questions in the terminal:
 - Telegram bot token
 - Telegram admin ID(s), comma-separated
 - Public server IP/domain for client configs
-- Install mode: `native` or `docker`
 - WireGuard interface, default `wg0`
 - WireGuard UDP port, default random `51820-51850`
 - External network interface for NAT, auto-detected by default
 
 When run through the one-command installer, it also asks for the installation directory, default `/opt/wgcontrolbot`.
 
-Recommended install mode is `native`. Docker mode runs the bot in Docker, but WireGuard still runs on the host because the bot manages the host WireGuard interface.
+The bot and WireGuard tools run in the same privileged Docker container. The container uses host networking so the WireGuard UDP port is opened directly on the server. WireGuard config files live in the project `wireguard/` directory and are mounted into the container as `/etc/wireguard`.
 
 After installation:
-
-```bash
-systemctl status wgcontrolbot
-journalctl -u wgcontrolbot -f
-```
-
-For Docker mode:
 
 ```bash
 cd /opt/wgcontrolbot
 docker compose ps
 docker compose logs -f
+```
+
+WireGuard status from the container:
+
+```bash
+cd /opt/wgcontrolbot
+docker compose exec bot wg show
 ```
 
 ## Non-Interactive Defaults
@@ -76,7 +75,7 @@ export WG_MAIN_IFACE=eth0
 curl -fsSL https://raw.githubusercontent.com/etunb/WGControlBot/master/scripts/install.sh | sudo -E bash
 ```
 
-The bot token, admin IDs, endpoint, and install mode are still asked interactively.
+The bot token, admin IDs, and endpoint are still asked interactively.
 
 ## Manual Install From Clone
 
@@ -94,9 +93,8 @@ The installer creates:
 
 - `.env`
 - `config.yaml`
-- `/etc/wireguard/wg0.conf`, or another interface if selected
+- `wireguard/wg0.conf`, or another interface if selected
 - `data/bot.db`
-- `/etc/systemd/system/wgcontrolbot.service` for native mode
 
 Example `config.yaml`:
 
@@ -112,7 +110,7 @@ wireguard:
   isolated_subnet_prefix: "10.0"
   isolated_subnet_mask: 24
 database:
-  path: /opt/wgcontrolbot/data/bot.db
+  path: /data/bot.db
 server:
   public_key: "SERVER_PUBLIC_KEY"
   endpoint: "vpn.example.com"
@@ -144,25 +142,28 @@ scripts/setup-wg-isolation.sh
 
 Rules allow:
 
-- Common subnet to reach all VPN subnets
+- `10.0.113.2` through `10.0.113.100` to reach all VPN subnets
+- `10.0.113.101` through `10.0.113.254` to communicate only inside `10.0.113.0/24`
+- Other VPN subnets to reach only `10.0.113.2` through `10.0.113.100` in the common subnet
 - Isolated subnet peers to reach peers in the same isolated subnet
 - Other WireGuard-to-WireGuard traffic to be dropped
 
-The WireGuard config calls the script from `PostUp` and `PostDown`, so rules are restored when the interface restarts.
+The WireGuard config calls the script from `PostUp` and `PostDown` inside the container, so rules are restored when the container restarts.
 
 ## Troubleshooting
 
 Bot logs:
 
 ```bash
-journalctl -u wgcontrolbot -f
+cd /opt/wgcontrolbot
+docker compose logs -f
 ```
 
 WireGuard status:
 
 ```bash
-wg show
-systemctl status wg-quick@wg0
+cd /opt/wgcontrolbot
+docker compose exec bot wg show
 ```
 
 Firewall checks:
@@ -176,7 +177,7 @@ Common issues:
 
 - Open the selected UDP port on the server firewall and router/cloud security group.
 - Make sure the endpoint entered during install is reachable from client devices.
-- In Docker mode, the container needs host networking, `NET_ADMIN`, and `/etc/wireguard` mounted. These are already set in `docker-compose.yml`.
+- The container needs host networking, privileged mode, `NET_ADMIN`, and `/lib/modules` mounted. These are already set in `docker-compose.yml`.
 
 ## Project Structure
 
@@ -186,11 +187,14 @@ WGControlBot/
 ├── .env.example
 ├── docker-compose.yml
 ├── Dockerfile
+├── docker-entrypoint.sh
 ├── requirements.txt
 ├── scripts/
 │   ├── install.sh
 │   ├── deploy.sh
 │   └── setup-wg-isolation.sh
+├── wireguard/
+│   └── wg0.conf
 ├── src/
 │   ├── main.py
 │   ├── bot/
