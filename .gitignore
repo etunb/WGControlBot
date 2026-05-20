@@ -27,6 +27,7 @@ config.yaml
 .env
 .env.*
 !.env.example
+compose.env
 
 # Local data
 data/

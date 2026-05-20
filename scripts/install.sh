@@ -17,6 +17,7 @@ set -e
 DEFAULT_REPO="https://github.com/etunb/WGControlBot.git"
 DEFAULT_DIR="/opt/wgcontrolbot"
 SNAP_DOCKER_DIR="/home/wgcontrolbot"
+COMPOSE_ENV_FILE_NAME="compose.env"
 
 ask() {
   prompt="$1"
@@ -157,7 +158,7 @@ create_wireguard_config() {
   mkdir -p "$WG_DIR"
   chmod 700 "$WG_DIR"
 
-  cat > "$PROJECT_DIR/.env" << EOF
+  cat > "$PROJECT_DIR/$COMPOSE_ENV_FILE_NAME" << EOF
 TELEGRAM_BOT_TOKEN=$BOT_TOKEN
 TELEGRAM_ADMIN_IDS=$ADMIN_IDS
 WG_SERVER_ENDPOINT=$ENDPOINT
@@ -201,7 +202,7 @@ write_app_config() {
   mkdir -p "$PROJECT_DIR/data"
   ADMIN_IDS_YAML="[$(echo "$ADMIN_IDS" | sed 's/,/, /g')]"
 
-  cat > "$PROJECT_DIR/.env" << EOF
+  cat > "$PROJECT_DIR/$COMPOSE_ENV_FILE_NAME" << EOF
 TELEGRAM_BOT_TOKEN=$BOT_TOKEN
 TELEGRAM_ADMIN_IDS=$ADMIN_IDS
 WG_SERVER_ENDPOINT=$ENDPOINT
@@ -233,9 +234,9 @@ EOF
 
 compose() {
   if docker compose version >/dev/null 2>&1; then
-    docker compose -f "$PROJECT_DIR/docker-compose.yml" "$@"
+    COMPOSE_DISABLE_ENV_FILE=1 docker compose --env-file "$PROJECT_DIR/$COMPOSE_ENV_FILE_NAME" -f "$PROJECT_DIR/docker-compose.yml" "$@"
   elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose -f "$PROJECT_DIR/docker-compose.yml" "$@"
+    docker-compose --env-file "$PROJECT_DIR/$COMPOSE_ENV_FILE_NAME" -f "$PROJECT_DIR/docker-compose.yml" "$@"
   else
     echo "Docker Compose is not installed." >&2
     exit 1
@@ -244,11 +245,11 @@ compose() {
 
 compose_display_cmd() {
   if docker compose version >/dev/null 2>&1; then
-    echo "docker compose -f $PROJECT_DIR/docker-compose.yml"
+    echo "COMPOSE_DISABLE_ENV_FILE=1 docker compose --env-file $PROJECT_DIR/$COMPOSE_ENV_FILE_NAME -f $PROJECT_DIR/docker-compose.yml"
   elif command -v docker-compose >/dev/null 2>&1; then
-    echo "docker-compose -f $PROJECT_DIR/docker-compose.yml"
+    echo "docker-compose --env-file $PROJECT_DIR/$COMPOSE_ENV_FILE_NAME -f $PROJECT_DIR/docker-compose.yml"
   else
-    echo "docker compose -f $PROJECT_DIR/docker-compose.yml"
+    echo "COMPOSE_DISABLE_ENV_FILE=1 docker compose --env-file $PROJECT_DIR/$COMPOSE_ENV_FILE_NAME -f $PROJECT_DIR/docker-compose.yml"
   fi
 }
 

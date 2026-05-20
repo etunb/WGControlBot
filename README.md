@@ -91,7 +91,7 @@ If the installer is run from a cloned project directory, it uses the current dir
 
 The installer creates:
 
-- `.env`
+- `compose.env`
 - `config.yaml`
 - `wireguard/wg0.conf`, or another interface if selected
 - `data/bot.db`
@@ -117,7 +117,7 @@ server:
   port: 51820
 ```
 
-Keep `.env` and `config.yaml` private. They are ignored by git.
+Keep `compose.env` and `config.yaml` private. They are ignored by git.
 
 ## Telegram Usage
 
